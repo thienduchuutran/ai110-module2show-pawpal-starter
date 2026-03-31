@@ -100,12 +100,22 @@ second the ui also changed. the starter code was saving tasks as plain dicts in 
 **a. Constraints and priorities**
 
 - What constraints does your scheduler consider (for example: time, priority, preferences)?
+
+The scheduler considers several constraints layered on top of each other. The hard constraints are the owner's time window (day_start / day_end) and the task's duration, a task that doesn't fit in the remaining window is skipped entirely, or shrunk to its min_duration if one is set. On top of that there are soft constraints: task priority (1–3), a required flag that guarantees placement before optional tasks, preferred_time / category defaults that nudge tasks into morning / afternoon / evening slots, an energy_budget that caps how much total effort the owner takes on, and a break_duration buffer inserted between tasks so nothing is back-to-back with no breathing room.
+
 - How did you decide which constraints mattered most?
+
+I ranked them by consequence. The time window is non-negotiable, you can't schedule outside the day. The required flag and priority come next because a required task like giving medication has to happen regardless of what else is on the list. Everything else (preferred slot, energy budget, buffer) is about comfort and realism rather than correctness, so it shapes the schedule but never overrides the hard constraints.
 
 **b. Tradeoffs**
 
 - Describe one tradeoff your scheduler makes.
+
+The scheduler is a greedy single-pass algorithm. It sorts tasks once by (required first, slot order, priority descending), then walks through them in that order and places each task as early as possible in its preferred window. It never goes back and reconsiders an earlier placement.
+
 - Why is that tradeoff reasonable for this scenario?
+
+For a daily pet care schedule with maybe 5-20 tasks, a near-optimal result is good enough. The owner doesn't need a mathematically perfect arrangement, they need a clear, workable plan quickly. A backtracking or constraint-satisfaction approach would handle edge cases better (for example, noticing that shifting a high-priority task 15 minutes later would let two lower-priority tasks fit instead of one), but it would add a lot of complexity for very little practical gain. The greedy approach is easy to reason about, easy to debug, and fast enough that it could run on every UI interaction without lag.
 
 ---
 
@@ -114,7 +124,9 @@ second the ui also changed. the starter code was saving tasks as plain dicts in 
 **a. How you used AI**
 
 - How did you use AI tools during this project (for example: design brainstorming, debugging, refactoring)?
+for helping me with designing OOP objects, catching when i miss something, explain the dataflow and how components are wired and layers interact with each other
 - What kinds of prompts or questions were most helpful?
+"explain to me how abc works"
 
 **b. Judgment and verification**
 
@@ -142,6 +154,7 @@ second the ui also changed. the starter code was saving tasks as plain dicts in 
 **a. What went well**
 
 - What part of this project are you most satisfied with?
+I learned more about systems design and some OOP implementation
 
 **b. What you would improve**
 
@@ -150,3 +163,4 @@ second the ui also changed. the starter code was saving tasks as plain dicts in 
 **c. Key takeaway**
 
 - What is one important thing you learned about designing systems or working with AI on this project?
+I am the driver, I must know what direction I'm going to direct the AI, can't let the AI drive me 

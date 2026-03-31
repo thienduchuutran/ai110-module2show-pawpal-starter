@@ -37,6 +37,33 @@ Tasks are ordered by required-first, then time-slot (morning → afternoon → e
 **Conflict detection**
 `detect_conflicts(plan)` does an O(n²) pass over the scheduled items and returns every overlapping pair. `warn_conflicts(plan)` wraps that result in formatted `"WARNING: ..."` strings ready for printing or UI display. Because `generate_plan` advances the clock after each task, the standard plan is always conflict-free; these methods are most valuable when plans are built or edited manually.
 
+## Testing PawPal+
+
+### Running the tests
+
+```bash
+python -m pytest tests/test_pawpal.py -v
+```
+
+### What the tests cover
+
+The suite contains **25 tests** across four areas:
+
+| Area | Tests | What is verified |
+|---|---|---|
+| **Sorting** | 4 | `sort_by_time` returns chronological order; `sort_tasks_by_priority` orders highest-priority first; equal-priority ties break on shorter duration; `required=True` tasks always surface before optional ones |
+| **Recurrence** | 5 | `daily` completion creates a next task due tomorrow; `weekly` creates one due in 7 days; `as_needed` returns `None` and never grows the task list; `Scheduler.mark_task_complete` appends the next occurrence to the pet |
+| **Conflict detection** | 6 | Same start time flags a conflict; partial overlaps are caught; back-to-back adjacent tasks are not flagged; empty and single-task plans return zero conflicts; `warn_conflicts` produces `"WARNING: ..."` strings |
+| **Edge cases** | 10 | Pet with no tasks yields an empty feasible plan; `as_needed` and future-dated tasks are excluded from the daily plan; weekly tasks on the wrong day are filtered out; `filter_by_pet` is case-insensitive; all scheduled tasks finish before `day_end`; shrinkable tasks are shrunk rather than skipped when the window is tight |
+
+### Confidence level
+
+**★★★★☆ (4 / 5)**
+
+The core scheduling logic is thoroughly exercised: sorting, recurrence chaining, conflict detection, and the most important edge cases all pass cleanly. The deduction reflects one known behaviour that could be considered a bug — required tasks are silently skipped when the energy budget is exceeded, with no bypass or warning. Until that is resolved the system should not be relied upon in energy-budget mode with critical required tasks.
+
+---
+
 ## Getting started
 
 ### Setup
