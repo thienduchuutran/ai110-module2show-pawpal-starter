@@ -303,9 +303,17 @@ class Scheduler:
         ]
 
     def filter_by_status(self, completed: bool = False) -> list[tuple[Task, Pet]]:
-        """Return (task, pet) pairs where task.completed matches *completed*.
+        """Return (task, pet) pairs filtered by completion status.
 
-        Pass ``completed=True`` to see finished tasks, ``False`` (default) for pending.
+        Scans every task for every pet registered with the owner, regardless of
+        whether the task is due today.
+
+        Args:
+            completed: When ``True``, return only completed tasks; when ``False``
+                (default), return only pending tasks.
+
+        Returns:
+            List of (Task, Pet) pairs where ``task.completed == completed``.
         """
         return [
             (task, pet)
@@ -315,14 +323,31 @@ class Scheduler:
         ]
 
     def filter_by_pet(self, pet_name: str) -> list[Task]:
-        """Return all tasks belonging to the pet whose name matches *pet_name* (case-insensitive)."""
+        """Return all tasks belonging to the named pet.
+
+        The name comparison is case-insensitive, so ``"buddy"`` and ``"Buddy"``
+        both match a pet named ``"Buddy"``.
+
+        Args:
+            pet_name: The pet's name to search for (case-insensitive).
+
+        Returns:
+            A copy of the pet's task list, or an empty list if no matching pet is found.
+        """
         for pet in self.owner.pets:
             if pet.name.lower() == pet_name.lower():
                 return list(pet.tasks)
         return []
 
     def get_recurring_tasks(self) -> list[tuple[Task, Pet]]:
-        """Return (task, pet) pairs for tasks scheduled on a recurring basis (daily or weekly)."""
+        """Return (task, pet) pairs for all tasks with a recurring schedule.
+
+        A task is considered recurring if its ``frequency`` is ``"daily"`` or
+        ``"weekly"``.  Tasks with ``frequency="as_needed"`` are excluded.
+
+        Returns:
+            List of (Task, Pet) pairs for daily and weekly tasks across all pets.
+        """
         return [
             (task, pet)
             for pet in self.owner.pets
@@ -370,10 +395,23 @@ class Scheduler:
     # ------------------------------------------------------------------
 
     def _sort_pairs(self, pairs: list[tuple[Task, Pet]]) -> list[tuple[Task, Pet]]:
-        """
-        Sort into tiers: (required first, slot order, priority desc).
-        Within each tier, interleave tasks by pet via round-robin so no single
-        pet monopolises consecutive slots.
+        """Sort task/pet pairs into a schedule-ready order.
+
+        Sorting strategy (applied in order):
+          1. Required tasks come before optional ones.
+          2. Within each tier, earlier time slots (morning → afternoon → evening → any)
+             come first.
+          3. Within each slot tier, higher-priority tasks precede lower-priority ones.
+          4. Tasks are interleaved across pets via round-robin so no single pet
+             monopolises consecutive slots.
+          5. Within each pet's queue, shorter tasks are scheduled first to reduce the
+             chance of running out of day.
+
+        Args:
+            pairs: Unordered list of (Task, Pet) tuples to be scheduled today.
+
+        Returns:
+            A new list of (Task, Pet) tuples in the desired scheduling order.
         """
         def tier_key(pair: tuple[Task, Pet]) -> tuple[bool, int, int]:
             task, _ = pair
@@ -403,7 +441,15 @@ class Scheduler:
         return result
 
     def sort_tasks_by_priority(self) -> list[tuple[Task, Pet]]:
-        """Return today's (task, pet) pairs sorted by priority desc, then duration asc."""
+        """Return today's pending tasks sorted by descending priority, then ascending duration.
+
+        Filters tasks through ``_filter_for_today`` (frequency, due-date, and validity
+        checks) before sorting, so the result only contains tasks that should run today.
+
+        Returns:
+            List of (Task, Pet) pairs sorted by (-priority, duration): highest-priority
+            tasks come first; ties are broken by preferring shorter tasks.
+        """
         return sorted(
             self._filter_for_today(),
             key=lambda pair: (-pair[0].priority, pair[0].duration),
@@ -412,8 +458,16 @@ class Scheduler:
     def sort_by_time(self, scheduled_tasks: list[ScheduledTask]) -> list[ScheduledTask]:
         """Return scheduled tasks sorted by start_time ascending.
 
-        Uses a lambda with strftime('%H:%M') as the sort key so that times stored
-        as strings in "HH:MM" format compare lexicographically in the correct order.
+        Uses ``start_time.strftime('%H:%M')`` as the sort key so that ``time``
+        objects compare lexicographically in the correct chronological order.
+
+        Args:
+            scheduled_tasks: A list of :class:`ScheduledTask` objects from a
+                :class:`DailyPlan`.
+
+        Returns:
+            A new list containing the same items ordered from earliest to latest
+            start time.
         """
         return sorted(scheduled_tasks, key=lambda st: st.start_time.strftime("%H:%M"))
 
@@ -496,8 +550,16 @@ class Scheduler:
     def detect_conflicts(self, plan: DailyPlan) -> list[tuple[ScheduledTask, ScheduledTask]]:
         """Return every pair of ScheduledTask objects whose time windows overlap.
 
-        Iterates over all ordered combinations once (O(n²)) and delegates the
-        overlap test to :meth:`ScheduledTask.conflicts_with`.
+        Two tasks conflict when one starts before the other ends — even a single
+        minute of overlap is reported.  The check runs in O(n²) over all scheduled
+        items and delegates the overlap test to :meth:`ScheduledTask.conflicts_with`.
+
+        Args:
+            plan: The :class:`DailyPlan` whose scheduled items should be checked.
+
+        Returns:
+            A list of ``(a, b)`` pairs where ``a.conflicts_with(b)`` is ``True``.
+            Returns an empty list when no overlaps exist.
         """
         conflicts: list[tuple[ScheduledTask, ScheduledTask]] = []
         items = plan.scheduled_items
@@ -508,11 +570,18 @@ class Scheduler:
         return conflicts
 
     def warn_conflicts(self, plan: DailyPlan) -> list[str]:
-        """Return a warning string for every overlapping task pair; never raises.
+        """Return a human-readable warning string for every overlapping task pair.
 
-        Lightweight strategy: reuses detect_conflicts (O(n²) pass) and formats
-        each overlap as a human-readable message.  Returns an empty list when
-        the plan is conflict-free.
+        Reuses :meth:`detect_conflicts` (O(n²)) and formats each overlap as a
+        plain-text message suitable for printing or displaying in the UI.
+        Never raises — returns an empty list for a conflict-free plan.
+
+        Args:
+            plan: The :class:`DailyPlan` to inspect for time-window overlaps.
+
+        Returns:
+            A list of ``"WARNING: ..."`` strings, one per conflicting pair.
+            Returns an empty list when the plan is conflict-free.
         """
         return [
             f"WARNING: [{a.pet.name}] '{a.task.name}' "
