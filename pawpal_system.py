@@ -22,12 +22,15 @@ class Task:
         return self.duration > 0 and self.priority in (1, 2, 3)
 
     def mark_complete(self) -> None:
+        """Mark this task as completed."""
         self.completed = True
 
     def reset(self) -> None:
+        """Reset the task to incomplete so it can be rescheduled."""
         self.completed = False
 
     def to_dict(self) -> dict:
+        """Serialize the task to a plain dictionary."""
         return {
             "name": self.name,
             "duration": self.duration,
@@ -56,6 +59,7 @@ class Pet:
     _DEFAULTS: dict[str, list[tuple]] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        """Populate the species-to-default-tasks lookup after dataclass init."""
         self._DEFAULTS = {
             "dog": [
                 ("Morning Walk",  30, 3, "walk"),
@@ -212,6 +216,7 @@ class DailyPlan:
 
 class Scheduler:
     def __init__(self, owner: Owner) -> None:
+        """Bind the scheduler to the given owner and their pets."""
         self.owner = owner
 
     def _task_pet_pairs(self) -> list[tuple[Task, Pet]]:
@@ -262,6 +267,7 @@ class Scheduler:
         return plan
 
     def _build_reasoning(self, reasons: list[str]) -> str:
+        """Format the per-task scheduling decisions into a readable explanation."""
         intro = (
             f"Scheduled across a {self.owner.get_available_time()}-min window "
             f"({self.owner.day_start.strftime('%H:%M')}-{self.owner.day_end.strftime('%H:%M')}), "
