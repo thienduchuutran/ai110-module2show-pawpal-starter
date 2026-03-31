@@ -89,9 +89,10 @@ The main responsibility split was: data objects (Owner, Pet, Task) hold informat
 
 - Did your design change during implementation? Yes
 - If yes, describe at least one change and why you made it.
-Owner now holds pets: list[Pet] (multiple pets) with get_all_tasks() / get_all_pending_tasks(). 
 
-I changed it because at first the README said a user enter basic owner + pet info, so i only let a pet per owner, but now i think an owner can manage multiple pets and should have access to all their tasks
+yes it changed in two ways. first i originally had owner connected to just one pet but then i realized that doesnt make sense because a person can have more than one animal. so i changed owner to hold a list of pets and added methods like get_all_tasks() so the scheduler can just ask the owner for everything instead of going through each pet manually.
+
+second the ui also changed. the starter code was saving tasks as plain dicts in session_state but once i had the real classes i just stored the whole owner object in session_state instead. that way all the data stays in one place and when i click generate schedule i just pass session_state.owner straight to the scheduler, no rebuilding needed.
 ---
 
 ## 2. Scheduling Logic and Tradeoffs
