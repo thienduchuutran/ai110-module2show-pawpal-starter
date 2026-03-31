@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 
 
@@ -21,14 +21,26 @@ class Task:
     effort: int = 1             # 1 (light) to 3 (heavy); counts toward owner energy budget
     notes: str = ""
     completed: bool = False
+    due_date: date | None = None  # None = no date constraint (always applicable)
 
     def is_valid(self) -> bool:
         """Return True if duration is positive and priority is 1–3."""
         return self.duration > 0 and self.priority in (1, 2, 3)
 
-    def mark_complete(self) -> None:
-        """Mark this task as completed."""
+    def mark_complete(self) -> "Task | None":
+        """Mark this task as completed.
+
+        For recurring tasks, returns a new Task instance for the next occurrence:
+          - daily  → due_date = today + 1 day
+          - weekly → due_date = today + 7 days
+        Returns None for as_needed tasks (no automatic next occurrence).
+        """
         self.completed = True
+        if self.frequency == "daily":
+            return replace(self, completed=False, due_date=date.today() + timedelta(days=1))
+        if self.frequency == "weekly":
+            return replace(self, completed=False, due_date=date.today() + timedelta(weeks=1))
+        return None
 
     def reset(self) -> None:
         """Reset the task to incomplete so it can be rescheduled."""
@@ -49,6 +61,7 @@ class Task:
             "effort": self.effort,
             "notes": self.notes,
             "completed": self.completed,
+            "due_date": self.due_date.isoformat() if self.due_date else None,
         }
 
 
@@ -270,7 +283,8 @@ class Scheduler:
     def _is_scheduled_today(self, task: Task) -> bool:
         """Return True if the task should run today based on its frequency."""
         if task.frequency == "daily":
-            return True
+            # due_date=None means always applicable (legacy tasks); otherwise must be due by today
+            return task.due_date is None or task.due_date <= date.today()
         if task.frequency == "as_needed":
             return False
         if task.frequency == "weekly":
@@ -315,6 +329,21 @@ class Scheduler:
             for task in pet.tasks
             if task.frequency in ("daily", "weekly")
         ]
+
+    def mark_task_complete(self, task: Task, pet: Pet) -> "Task | None":
+        """Mark *task* complete and, for recurring tasks, add the next occurrence to *pet*.
+
+        Returns the newly created Task for the next occurrence, or None for as_needed tasks.
+
+        Example
+        -------
+        next_task = scheduler.mark_task_complete(feeding_task, my_dog)
+        # my_dog.tasks now contains a fresh Feeding task due tomorrow
+        """
+        next_task = task.mark_complete()
+        if next_task is not None:
+            pet.add_task(next_task)
+        return next_task
 
     # ------------------------------------------------------------------
     # Time-slot helpers
