@@ -288,6 +288,34 @@ class Scheduler:
             if task.is_valid() and self._is_scheduled_today(task)
         ]
 
+    def filter_by_status(self, completed: bool = False) -> list[tuple[Task, Pet]]:
+        """Return (task, pet) pairs where task.completed matches *completed*.
+
+        Pass ``completed=True`` to see finished tasks, ``False`` (default) for pending.
+        """
+        return [
+            (task, pet)
+            for pet in self.owner.pets
+            for task in pet.tasks
+            if task.completed == completed
+        ]
+
+    def filter_by_pet(self, pet_name: str) -> list[Task]:
+        """Return all tasks belonging to the pet whose name matches *pet_name* (case-insensitive)."""
+        for pet in self.owner.pets:
+            if pet.name.lower() == pet_name.lower():
+                return list(pet.tasks)
+        return []
+
+    def get_recurring_tasks(self) -> list[tuple[Task, Pet]]:
+        """Return (task, pet) pairs for tasks scheduled on a recurring basis (daily or weekly)."""
+        return [
+            (task, pet)
+            for pet in self.owner.pets
+            for task in pet.tasks
+            if task.frequency in ("daily", "weekly")
+        ]
+
     # ------------------------------------------------------------------
     # Time-slot helpers
     # ------------------------------------------------------------------
@@ -351,6 +379,14 @@ class Scheduler:
             self._filter_for_today(),
             key=lambda pair: (-pair[0].priority, pair[0].duration),
         )
+
+    def sort_by_time(self, scheduled_tasks: list[ScheduledTask]) -> list[ScheduledTask]:
+        """Return scheduled tasks sorted by start_time ascending.
+
+        Uses a lambda with strftime('%H:%M') as the sort key so that times stored
+        as strings in "HH:MM" format compare lexicographically in the correct order.
+        """
+        return sorted(scheduled_tasks, key=lambda st: st.start_time.strftime("%H:%M"))
 
     # ------------------------------------------------------------------
     # Core scheduling
@@ -423,6 +459,24 @@ class Scheduler:
 
         plan.reasoning = self._build_reasoning(reasons, total_effort)
         return plan
+
+    # ------------------------------------------------------------------
+    # Conflict detection
+    # ------------------------------------------------------------------
+
+    def detect_conflicts(self, plan: DailyPlan) -> list[tuple[ScheduledTask, ScheduledTask]]:
+        """Return every pair of ScheduledTask objects whose time windows overlap.
+
+        Iterates over all ordered combinations once (O(n²)) and delegates the
+        overlap test to :meth:`ScheduledTask.conflicts_with`.
+        """
+        conflicts: list[tuple[ScheduledTask, ScheduledTask]] = []
+        items = plan.scheduled_items
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                if items[i].conflicts_with(items[j]):
+                    conflicts.append((items[i], items[j]))
+        return conflicts
 
     def _build_reasoning(self, reasons: list[str], total_effort: int) -> str:
         """Format per-task scheduling decisions into a readable explanation."""
