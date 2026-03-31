@@ -507,6 +507,21 @@ class Scheduler:
                     conflicts.append((items[i], items[j]))
         return conflicts
 
+    def warn_conflicts(self, plan: DailyPlan) -> list[str]:
+        """Return a warning string for every overlapping task pair; never raises.
+
+        Lightweight strategy: reuses detect_conflicts (O(n²) pass) and formats
+        each overlap as a human-readable message.  Returns an empty list when
+        the plan is conflict-free.
+        """
+        return [
+            f"WARNING: [{a.pet.name}] '{a.task.name}' "
+            f"({a.start_time.strftime('%H:%M')}-{a.end_time().strftime('%H:%M')}) "
+            f"overlaps with [{b.pet.name}] '{b.task.name}' "
+            f"({b.start_time.strftime('%H:%M')}-{b.end_time().strftime('%H:%M')})"
+            for a, b in self.detect_conflicts(plan)
+        ]
+
     def _build_reasoning(self, reasons: list[str], total_effort: int) -> str:
         """Format per-task scheduling decisions into a readable explanation."""
         budget_note = (

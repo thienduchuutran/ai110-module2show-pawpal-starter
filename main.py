@@ -1,5 +1,5 @@
 from datetime import time
-from pawpal_system import Owner, Pet, Task, Scheduler
+from pawpal_system import Owner, Pet, Task, Scheduler, DailyPlan, ScheduledTask
 
 # --- Owner ---
 owner = Owner(
@@ -114,6 +114,40 @@ if conflicts:
             f"  vs  [{b.pet.name}] {b.task.name} "
             f"({b.start_time.strftime('%H:%M')}-{b.end_time().strftime('%H:%M')})"
         )
+else:
+    print("  No conflicts detected.")
+
+# -----------------------------------------------------------------------
+# warn_conflicts — lightweight warning demo with manually-overlapping tasks
+#
+# generate_plan() naturally avoids overlaps by advancing current_dt after
+# each task, so we build a DailyPlan by hand to force two tasks that share
+# the same time window and verify warn_conflicts catches them.
+# -----------------------------------------------------------------------
+conflict_plan = DailyPlan(owner=owner)
+conflict_plan.scheduled_items = [
+    ScheduledTask(
+        task=Task(name="Morning Walk", duration=30, priority=3, category="walk"),
+        pet=buddy,
+        start_time=time(8, 0),          # 08:00 – 08:30
+    ),
+    ScheduledTask(
+        task=Task(name="Feeding", duration=20, priority=3, category="feeding"),
+        pet=mochi,
+        start_time=time(8, 15),         # 08:15 – 08:35  ← overlaps above
+    ),
+    ScheduledTask(
+        task=Task(name="Evening Walk", duration=25, priority=2, category="walk"),
+        pet=buddy,
+        start_time=time(18, 0),         # 18:00 – 18:25  ← no overlap
+    ),
+]
+
+print("\n========== warn_conflicts (overlapping demo) ==========")
+warnings = scheduler.warn_conflicts(conflict_plan)
+if warnings:
+    for w in warnings:
+        print(" ", w)
 else:
     print("  No conflicts detected.")
 
