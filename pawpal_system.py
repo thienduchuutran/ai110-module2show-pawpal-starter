@@ -10,10 +10,15 @@ from datetime import date, datetime, time, timedelta
 @dataclass
 class Task:
     name: str
-    duration: int           # minutes
-    priority: int           # 1 = low, 2 = medium, 3 = high
-    category: str = ""      # walk / feeding / meds / grooming / enrichment
-    frequency: str = "daily"  # daily / weekly / as_needed
+    duration: int               # minutes (maximum; or fixed when min_duration == 0)
+    priority: int               # 1 = low, 2 = medium, 3 = high
+    category: str = ""          # walk / feeding / meds / grooming / enrichment
+    frequency: str = "daily"    # daily / weekly / as_needed
+    scheduled_day: str = ""     # for weekly tasks: "monday".."sunday"; empty = skip
+    preferred_time: str = "any" # morning / afternoon / evening / any
+    min_duration: int = 0       # 0 = fixed duration; >0 = can shrink to this minimum
+    required: bool = False      # guaranteed placement before optional tasks
+    effort: int = 1             # 1 (light) to 3 (heavy); counts toward owner energy budget
     notes: str = ""
     completed: bool = False
 
@@ -37,6 +42,11 @@ class Task:
             "priority": self.priority,
             "category": self.category,
             "frequency": self.frequency,
+            "scheduled_day": self.scheduled_day,
+            "preferred_time": self.preferred_time,
+            "min_duration": self.min_duration,
+            "required": self.required,
+            "effort": self.effort,
             "notes": self.notes,
             "completed": self.completed,
         }
@@ -109,6 +119,8 @@ class Owner:
     name: str
     day_start: time = time(8, 0)
     day_end: time = time(20, 0)
+    break_duration: int = 5      # minutes of buffer inserted between consecutive tasks
+    energy_budget: int = 0       # max total effort points across all tasks; 0 = no cap
     preferences: dict = field(default_factory=dict)
     pets: list[Pet] = field(default_factory=list)
 
@@ -148,11 +160,16 @@ class ScheduledTask:
     task: Task
     pet: Pet
     start_time: time
+    actual_duration: int = 0  # set by Scheduler; may be < task.duration when shrunk to fit
+
+    def __post_init__(self) -> None:
+        if self.actual_duration == 0:
+            self.actual_duration = self.task.duration
 
     def end_time(self) -> time:
-        """Compute end time using datetime arithmetic (time has no + operator)."""
+        """Compute end time from actual_duration (which may differ from task.duration)."""
         start_dt = datetime.combine(date.today(), self.start_time)
-        return (start_dt + timedelta(minutes=self.task.duration)).time()
+        return (start_dt + timedelta(minutes=self.actual_duration)).time()
 
     def conflicts_with(self, other: ScheduledTask) -> bool:
         """Return True if this slot overlaps with another ScheduledTask."""
@@ -172,8 +189,8 @@ class DailyPlan:
 
     @property
     def total_duration(self) -> int:
-        """Sum of all scheduled task durations."""
-        return sum(item.task.duration for item in self.scheduled_items)
+        """Sum of actual scheduled durations (respects shrinkage)."""
+        return sum(item.actual_duration for item in self.scheduled_items)
 
     def is_feasible(self) -> bool:
         """Return True if every scheduled item fits inside the owner's day window."""
@@ -189,10 +206,15 @@ class DailyPlan:
             return "No tasks scheduled."
         lines = ["Daily Plan", "=" * 42]
         for item in sorted(self.scheduled_items, key=lambda x: x.start_time):
+            shrunk = (
+                f" [shrunk to {item.actual_duration}min]"
+                if item.actual_duration < item.task.duration
+                else ""
+            )
             lines.append(
                 f"  {item.start_time.strftime('%H:%M')} - {item.end_time().strftime('%H:%M')}"
                 f"  [{item.pet.name}] {item.task.name}"
-                f"  (P{item.task.priority})"
+                f"  (P{item.task.priority}){shrunk}"
             )
         lines.append(f"\nTime used : {self.total_duration} min")
         if self.skipped_tasks:
@@ -215,62 +237,203 @@ class DailyPlan:
 # ---------------------------------------------------------------------------
 
 class Scheduler:
+    # Clock windows that define each time-of-day slot.
+    # Clipped to the owner's day_start/day_end at runtime.
+    _SLOT_WINDOWS: dict[str, tuple[time, time]] = {
+        "morning":   (time(5, 0),  time(12, 0)),
+        "afternoon": (time(12, 0), time(17, 0)),
+        "evening":   (time(17, 0), time(22, 0)),
+    }
+
+    # Lower number = scheduled earlier in the day.
+    _SLOT_ORDER: dict[str, int] = {
+        "morning": 0, "afternoon": 1, "evening": 2, "any": 3,
+    }
+
+    # Sensible slot defaults inferred from task category when preferred_time == "any".
+    _CATEGORY_SLOT_DEFAULTS: dict[str, str] = {
+        "feeding":    "morning",
+        "walk":       "morning",
+        "meds":       "morning",
+        "grooming":   "afternoon",
+        "enrichment": "afternoon",
+    }
+
     def __init__(self, owner: Owner) -> None:
         """Bind the scheduler to the given owner and their pets."""
         self.owner = owner
 
-    def _task_pet_pairs(self) -> list[tuple[Task, Pet]]:
-        """Gather all pending (task, pet) pairs from every pet."""
+    # ------------------------------------------------------------------
+    # Filtering
+    # ------------------------------------------------------------------
+
+    def _is_scheduled_today(self, task: Task) -> bool:
+        """Return True if the task should run today based on its frequency."""
+        if task.frequency == "daily":
+            return True
+        if task.frequency == "as_needed":
+            return False
+        if task.frequency == "weekly":
+            if not task.scheduled_day:
+                return False
+            return date.today().strftime("%A").lower() == task.scheduled_day.lower()
+        return True
+
+    def _filter_for_today(self) -> list[tuple[Task, Pet]]:
+        """Return all valid, pending, today-applicable (task, pet) pairs."""
         return [
             (task, pet)
             for pet in self.owner.pets
             for task in pet.get_pending_tasks()
-            if task.is_valid()
+            if task.is_valid() and self._is_scheduled_today(task)
         ]
 
+    # ------------------------------------------------------------------
+    # Time-slot helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_preferred_time(self, task: Task) -> str:
+        """Return the task's preferred slot, falling back to category-based defaults."""
+        if task.preferred_time != "any":
+            return task.preferred_time
+        return self._CATEGORY_SLOT_DEFAULTS.get(task.category, "any")
+
+    def _preferred_start(self, task: Task, current_dt: datetime, owner_start: datetime) -> datetime:
+        """Return the effective start time, advancing into the preferred slot if needed."""
+        resolved = self._resolve_preferred_time(task)
+        if resolved not in self._SLOT_WINDOWS:
+            return current_dt
+        slot_start, _ = self._SLOT_WINDOWS[resolved]
+        # Never start before the owner's day begins.
+        effective_slot_start = max(datetime.combine(date.today(), slot_start), owner_start)
+        return max(current_dt, effective_slot_start)
+
+    # ------------------------------------------------------------------
+    # Sorting
+    # ------------------------------------------------------------------
+
+    def _sort_pairs(self, pairs: list[tuple[Task, Pet]]) -> list[tuple[Task, Pet]]:
+        """
+        Sort into tiers: (required first, slot order, priority desc).
+        Within each tier, interleave tasks by pet via round-robin so no single
+        pet monopolises consecutive slots.
+        """
+        def tier_key(pair: tuple[Task, Pet]) -> tuple[bool, int, int]:
+            task, _ = pair
+            resolved = self._resolve_preferred_time(task)
+            return (not task.required, self._SLOT_ORDER.get(resolved, 3), -task.priority)
+
+        # Group by tier while preserving a per-pet queue inside each tier.
+        tiers: dict[tuple, dict[str, list[tuple[Task, Pet]]]] = {}
+        for pair in sorted(pairs, key=tier_key):
+            key = tier_key(pair)
+            tiers.setdefault(key, {})
+            tiers[key].setdefault(pair[1].name, []).append(pair)
+
+        result: list[tuple[Task, Pet]] = []
+        for key in sorted(tiers.keys()):
+            pet_queues = tiers[key]
+            pet_names = list(pet_queues.keys())
+            # Within each pet queue, prefer shorter tasks first.
+            for name in pet_names:
+                pet_queues[name].sort(key=lambda p: p[0].duration)
+            # Round-robin across pets to interleave their tasks.
+            while any(pet_queues[name] for name in pet_names):
+                for name in pet_names:
+                    if pet_queues[name]:
+                        result.append(pet_queues[name].pop(0))
+
+        return result
+
     def sort_tasks_by_priority(self) -> list[tuple[Task, Pet]]:
-        """Return (task, pet) pairs sorted by priority desc, then duration asc."""
+        """Return today's (task, pet) pairs sorted by priority desc, then duration asc."""
         return sorted(
-            self._task_pet_pairs(),
+            self._filter_for_today(),
             key=lambda pair: (-pair[0].priority, pair[0].duration),
         )
 
+    # ------------------------------------------------------------------
+    # Core scheduling
+    # ------------------------------------------------------------------
+
     def fits_in_window(self, tasks: list[Task]) -> bool:
-        """Return True if the combined duration fits inside the owner's available time."""
-        return sum(t.duration for t in tasks) <= self.owner.get_available_time()
+        """Return True if tasks fit using min_duration where available."""
+        effective_total = sum(t.min_duration or t.duration for t in tasks)
+        return effective_total <= self.owner.get_available_time()
 
     def generate_plan(self) -> DailyPlan:
         """
-        Greedy scheduler: place tasks highest-priority first into consecutive
-        slots starting at owner.day_start; skip anything that won't fit.
+        Schedule tasks into the owner's day using:
+          1. Frequency filtering  — skip tasks not due today
+          2. Required-first order — guaranteed tasks placed before optional ones
+          3. Per-pet interleaving — round-robin within each priority tier
+          4. Time-slot pinning    — tasks advance into their preferred window
+          5. Category defaults    — feeding/walk → morning, grooming → afternoon, etc.
+          6. Duration flexibility — shrink to min_duration before skipping
+          7. Buffer gaps          — owner.break_duration inserted after each task
+          8. Energy budget        — skip tasks that exceed owner.energy_budget
         """
         plan = DailyPlan(owner=self.owner)
-        current_dt = datetime.combine(date.today(), self.owner.day_start)
-        end_dt = datetime.combine(date.today(), self.owner.day_end)
         reasons: list[str] = []
 
-        for task, pet in self.sort_tasks_by_priority():
-            task_end_dt = current_dt + timedelta(minutes=task.duration)
-            if task_end_dt <= end_dt:
-                plan.scheduled_items.append(
-                    ScheduledTask(task=task, pet=pet, start_time=current_dt.time())
-                )
-                reasons.append(
-                    f"'{task.name}' (P{task.priority}) -> {current_dt.strftime('%H:%M')} [{pet.name}]"
-                )
-                current_dt = task_end_dt
-            else:
-                plan.skipped_tasks.append(task)
-                reasons.append(f"'{task.name}' skipped — window too tight")
+        pairs = self._filter_for_today()
+        if not pairs:
+            return plan
 
-        plan.reasoning = self._build_reasoning(reasons)
+        today = date.today()
+        owner_start = datetime.combine(today, self.owner.day_start)
+        owner_end = datetime.combine(today, self.owner.day_end)
+        current_dt = owner_start
+        total_effort = 0
+
+        for task, pet in self._sort_pairs(pairs):
+            # 8. Energy budget check.
+            if self.owner.energy_budget > 0 and total_effort + task.effort > self.owner.energy_budget:
+                plan.skipped_tasks.append(task)
+                tag = " [required]" if task.required else ""
+                reasons.append(f"'{task.name}'{tag} skipped — energy budget exceeded")
+                continue
+
+            # 4 & 5. Advance into preferred time slot if we haven't reached it yet.
+            start_dt = self._preferred_start(task, current_dt, owner_start)
+
+            # 6. Try full duration; shrink to min_duration if the task allows it.
+            duration = task.duration
+            if start_dt + timedelta(minutes=duration) > owner_end and task.min_duration > 0:
+                duration = task.min_duration
+
+            if start_dt + timedelta(minutes=duration) > owner_end:
+                plan.skipped_tasks.append(task)
+                tag = " [required]" if task.required else ""
+                reasons.append(f"'{task.name}'{tag} skipped — window too tight")
+                continue
+
+            plan.scheduled_items.append(
+                ScheduledTask(task=task, pet=pet, start_time=start_dt.time(), actual_duration=duration)
+            )
+            total_effort += task.effort
+
+            shrunk = f", shrunk from {task.duration}min" if duration < task.duration else ""
+            reasons.append(
+                f"'{task.name}' (P{task.priority}, {duration}min{shrunk})"
+                f" -> {start_dt.strftime('%H:%M')} [{pet.name}]"
+            )
+            # 7. Advance pointer past the task and its trailing buffer.
+            current_dt = start_dt + timedelta(minutes=duration + self.owner.break_duration)
+
+        plan.reasoning = self._build_reasoning(reasons, total_effort)
         return plan
 
-    def _build_reasoning(self, reasons: list[str]) -> str:
-        """Format the per-task scheduling decisions into a readable explanation."""
+    def _build_reasoning(self, reasons: list[str], total_effort: int) -> str:
+        """Format per-task scheduling decisions into a readable explanation."""
+        budget_note = (
+            f", effort {total_effort}/{self.owner.energy_budget}"
+            if self.owner.energy_budget > 0
+            else ""
+        )
         intro = (
             f"Scheduled across a {self.owner.get_available_time()}-min window "
-            f"({self.owner.day_start.strftime('%H:%M')}-{self.owner.day_end.strftime('%H:%M')}), "
-            "ordered by priority (highest first):\n"
+            f"({self.owner.day_start.strftime('%H:%M')}-{self.owner.day_end.strftime('%H:%M')})"
+            f"{budget_note}, ordered by priority (highest first):\n"
         )
         return intro + "\n".join(f"  - {r}" for r in reasons)
