@@ -87,9 +87,11 @@ The main responsibility split was: data objects (Owner, Pet, Task) hold informat
 
 **b. Design changes**
 
-- Did your design change during implementation?
+- Did your design change during implementation? Yes
 - If yes, describe at least one change and why you made it.
+Owner now holds pets: list[Pet] (multiple pets) with get_all_tasks() / get_all_pending_tasks(). 
 
+I changed it because at first the README said a user enter basic owner + pet info, so i only let a pet per owner, but now i think an owner can manage multiple pets and should have access to all their tasks
 ---
 
 ## 2. Scheduling Logic and Tradeoffs
