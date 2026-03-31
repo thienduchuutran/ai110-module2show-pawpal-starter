@@ -5,7 +5,85 @@
 **a. Initial design**
 
 - Briefly describe your initial UML design.
+My initial design had 5–6 classes:
+
+Owner: stores the user's name, available time window, and preferences
+Pet: stores the animal's name, species, age, and any special needs
+Task: holds a single care activity with its duration, priority, and category
+Scheduler: the core logic class; takes an Owner, Pet, and list of Tasks and produces a plan
+DailyPlan: the output object; holds an ordered list of scheduled items, skipped tasks, and a reasoning string
+ScheduledTask: a lightweight wrapper pairing a Task with a specific start time
+
+classDiagram
+    class Owner {
+        +str name
+        +int available_minutes
+        +time day_start
+        +time day_end
+        +dict preferences
+        +add_pet(pet)
+        +get_available_time() int
+        +update_preferences()
+    }
+
+    class Pet {
+        +str name
+        +str species
+        +int age
+        +str breed
+        +list special_needs
+        +get_default_tasks() list
+    }
+
+    class Task {
+        +str name
+        +int duration
+        +int priority
+        +str category
+        +str notes
+        +is_valid() bool
+        +to_dict() dict
+    }
+
+    class Scheduler {
+        +Owner owner
+        +Pet pet
+        +list tasks
+        +generate_plan() DailyPlan
+        +sort_tasks_by_priority() list
+        +fits_in_window(tasks) bool
+        +explain_reasoning() str
+    }
+
+    class DailyPlan {
+        +list scheduled_items
+        +int total_duration
+        +list skipped_tasks
+        +str reasoning
+        +display() str
+        +is_feasible() bool
+        +get_summary() str
+    }
+
+    class ScheduledTask {
+        +Task task
+        +time start_time
+        +conflicts_with(other) bool
+        +end_time() time
+    }
+
+    Owner "1" --> "1" Pet
+    Owner "1" --> "*" Task
+    Scheduler --> Owner
+    Scheduler --> Pet
+    Scheduler --> Task
+    Scheduler ..> DailyPlan : produces
+    DailyPlan "1" --> "*" ScheduledTask
+    ScheduledTask --> Task
+
+
 - What classes did you include, and what responsibilities did you assign to each?
+The main responsibility split was: data objects (Owner, Pet, Task) hold information, Scheduler holds logic, and DailyPlan holds the result
 
 **b. Design changes**
 
